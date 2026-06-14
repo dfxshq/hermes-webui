@@ -7034,7 +7034,7 @@ def handle_get(handler, parsed) -> bool:
 
     # ── Memory API (GET) ──
     if parsed.path == "/api/memory":
-        return _handle_memory_read(handler)
+        return _handle_memory_read(handler, parsed)
 
     # ── Profile API (GET) ──
     if parsed.path == "/api/profiles":
@@ -12086,7 +12086,172 @@ def _handle_cron_recent(handler, parsed):
         return j(handler, {"completions": [], "since": since})
 
 
-def _handle_memory_read(handler):
+_PROJECT_CONTEXT_HERMES_NAMES = (".hermes.md", "HERMES.md")
+# Mirror the agent's lowercase filename variants (agents.md / claude.md) so the
+# tab does not under-report on case-sensitive filesystems.
+_PROJECT_CONTEXT_CWD_NAMES = (
+    "AGENTS.md",
+    "agents.md",
+    "CLAUDE.md",
+    "claude.md",
+    ".cursorrules",
+)
+# Modern Cursor rules live in a directory of .mdc files, which the agent also loads.
+_PROJECT_CONTEXT_CURSOR_RULES_GLOB = ".cursor/rules/*.mdc"
+_PROJECT_CONTEXT_MAX_BYTES = 20_000
+
+
+def _strip_project_context_frontmatter(content: str) -> str:
+    """Strip a leading YAML frontmatter block, mirroring the agent's loader.
+
+    The agent removes a leading ``---\\n ... \\n---`` block before injecting a
+    context file. Without this the tab would display frontmatter the agent never
+    sends to the model.
+    """
+    if not content.startswith("---"):
+        return content
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return content
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() in ("---", "..."):
+            return "".join(lines[idx + 1:]).lstrip("\n")
+    return content
+
+
+def _project_context_git_root(start: Path) -> Path | None:
+    """Return the nearest git root for project context discovery."""
+    current = start.resolve()
+    for parent in [current, *current.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _project_context_candidates(workspace: Path) -> list[Path]:
+    """Mirror the agent's first-match project context file priority."""
+    cwd = workspace.resolve()
+    candidates: list[Path] = []
+    stop_at = _project_context_git_root(cwd)
+
+    for directory in [cwd, *cwd.parents]:
+        for name in _PROJECT_CONTEXT_HERMES_NAMES:
+            candidates.append(directory / name)
+        if stop_at and directory == stop_at:
+            break
+
+    for name in _PROJECT_CONTEXT_CWD_NAMES:
+        candidates.append(cwd / name)
+
+    # Modern Cursor rules: the agent reads .cursor/rules/*.mdc in addition to
+    # the legacy .cursorrules file. Sort for deterministic ordering.
+    try:
+        candidates.extend(sorted(cwd.glob(_PROJECT_CONTEXT_CURSOR_RULES_GLOB)))
+    except OSError:
+        pass
+
+    return candidates
+
+
+def _memory_project_context_workspace(parsed) -> Path | None:
+    qs = parse_qs(parsed.query or "") if parsed is not None else {}
+    sid = qs.get("session_id", [""])[0]
+    if sid:
+        try:
+            # A blank session workspace (freshly-created/draft sessions) must not
+            # fall through to Path("").resolve(), which returns the server's own
+            # CWD and would surface the install's AGENTS.md/HERMES.md as if it
+            # were the user's project context.
+            ws = (get_session(sid).workspace or "").strip()
+            if not ws:
+                return None
+            return Path(ws).expanduser().resolve()
+        except Exception:
+            return None
+
+    raw_workspace = qs.get("workspace", [""])[0] or os.environ.get("TERMINAL_CWD", "") or get_last_workspace()
+    if not raw_workspace:
+        return None
+    try:
+        return Path(resolve_trusted_workspace(raw_workspace)).expanduser().resolve()
+    except Exception:
+        logger.debug("Skipping project context for untrusted workspace %s", raw_workspace, exc_info=True)
+        return None
+
+
+def _read_active_project_context(workspace: Path | None) -> dict:
+    payload = {
+        "content": "",
+        "path": "",
+        "mtime": None,
+        "workspace": str(workspace) if workspace else "",
+        "shadowed": [],
+    }
+    if not workspace:
+        return payload
+    try:
+        if not workspace.exists() or not workspace.is_dir():
+            return payload
+    except OSError:
+        return payload
+
+    seen: set[str] = set()
+    readable: list[dict] = []
+    for candidate in _project_context_candidates(workspace):
+        try:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            key = os.path.normcase(str(resolved)).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            content = resolved.read_text(encoding="utf-8", errors="replace")
+            # Mirror what the agent actually injects: strip YAML frontmatter and
+            # cap each source, so the tab reports the effective context rather
+            # than raw file bytes the agent never sends to the model.
+            content = _strip_project_context_frontmatter(content)
+            if len(content) > _PROJECT_CONTEXT_MAX_BYTES:
+                content = content[:_PROJECT_CONTEXT_MAX_BYTES]
+            if not content.strip():
+                continue
+            readable.append(
+                {
+                    "name": resolved.name,
+                    "path": str(resolved),
+                    "content": content,
+                    "mtime": resolved.stat().st_mtime,
+                }
+            )
+        except Exception:
+            logger.debug("Could not read project context candidate %s", candidate, exc_info=True)
+
+    if not readable:
+        return payload
+
+    active = readable[0]
+    payload.update(
+        {
+            "content": active["content"],
+            "path": active["path"],
+            "mtime": active["mtime"],
+            "name": active["name"],
+            "shadowed": [
+                {
+                    "name": item["name"],
+                    "path": item["path"],
+                    "mtime": item["mtime"],
+                    "shadowed_by": active["name"],
+                    "shadowed_by_path": active["path"],
+                }
+                for item in readable[1:]
+            ],
+        }
+    )
+    return payload
+
+
+def _handle_memory_read(handler, parsed=None):
     try:
         from api.profiles import get_active_hermes_home
 
@@ -12113,18 +12278,25 @@ def _handle_memory_read(handler):
         if soul_file.exists()
         else ""
     )
+    project_context = _read_active_project_context(_memory_project_context_workspace(parsed))
     return j(
         handler,
         {
             "memory": _redact_text(memory),
             "user": _redact_text(user),
             "soul": _redact_text(soul),
+            "project_context": _redact_text(project_context["content"]),
             "memory_path": str(mem_file),
             "user_path": str(user_file),
             "soul_path": str(soul_file),
+            "project_context_path": project_context["path"],
+            "project_context_name": project_context.get("name", ""),
+            "project_context_workspace": project_context["workspace"],
             "memory_mtime": mem_file.stat().st_mtime if mem_file.exists() else None,
             "user_mtime": user_file.stat().st_mtime if user_file.exists() else None,
             "soul_mtime": soul_file.stat().st_mtime if soul_file.exists() else None,
+            "project_context_mtime": project_context["mtime"],
+            "project_context_shadowed": project_context["shadowed"],
             "external_notes_enabled": _external_notes_sources_enabled(),
         },
     )

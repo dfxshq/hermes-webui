@@ -3,6 +3,24 @@
 
 ## [Unreleased]
 
+## [v0.51.467] — 2026-06-16 — Release QB (symlinks in workspace file tree)
+
+### Added
+
+- **The workspace file tree now shows symlinks with a distinct chain-link icon (#4226).** Symbolic links (both directory and file symlinks) render with a chain-link icon instead of the regular file/folder icon, and hovering a symlink shows "Symlink → {target}" with long targets middle-elided. Directory symlinks still expand and navigate like folders; regular files and folders are unchanged. The symlink target is the server-resolved path (already filtered to in-workspace targets by the existing workspace trust boundary) and is rendered via the DOM `title` property — never an HTML sink — so an arbitrary symlink target cannot inject markup. Thanks @rodboev.
+
+## [v0.51.466] — 2026-06-16 — Release QA (active transcript reconciles on session events)
+
+### Fixed
+
+- **An open WebUI transcript now reconciles when another client/process updates it (#4205 follow-up).** The #3916/#4195 external-refresh guard made the 30-second poll correctly skip WebUI-native sessions — but it also made `refreshActiveSessionIfExternallyUpdated()` return early for *every* non-external session, so a real `sessions_changed` event would update the sidebar list while leaving the currently-open transcript stale. The early-return is now scoped to the periodic `poll` path only; `event`/focus/visibility triggers run the existing count/timestamp divergence check (guarded by the in-flight/busy/streaming locks, so no refresh loop), and `_scheduleSessionEventsRefresh` reconciles the active transcript, not just the sidebar.
+
+## [v0.51.465] — 2026-06-16 — Release PZ (workspace null-byte hardening)
+
+### Fixed
+
+- **Remote workspace paths containing an embedded null byte are now rejected (#4326).** Completes the #4273/#3664 remote-workspace trust-boundary hardening (v0.51.463): `_remote_terminal_workspace_candidate` now fails closed on a `\x00` in either the candidate path or `terminal.cwd`, before normalization. Previously a null-byte path skipped the POSIX-normalize branch, `_safe_resolve` swallowed the `ValueError` and returned the raw null `Path`, and the string-level containment check wrongly succeeded — accepting the path. Matches the fail-closed null-byte handling already applied at `_as_posix_path` / `_safe_resolve`. Thanks @rodboev.
+
 ## [v0.51.464] — 2026-06-16 — Release PY (scannable model picker)
 
 ### Added

@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.534] — 2026-06-20 — Release SS (clarify prompt no longer bricks the session on expiry)
+
+### Fixed
+
+- **An expired clarify prompt no longer locks up the session (#4504).** When a clarify prompt's countdown hit zero, the agent cleared server state but the browser kept the clarify card docked and the composer locked, and the only escape — submitting — was rejected with `409 {stale: true}`, leaving the session stuck until a reload. The client now treats a 409 on submit as terminal: it re-enables the composer, hands the typed draft back to it, and dismisses the stale card. The dismissal is guarded by the same `clarify_id` check the success path uses, so a late 409 for an expired prompt can't tear down a newer prompt that already rendered (#2639 preserved); and the composer's loading state is cleared before the draft is stashed so the typed answer is never silently dropped. `clear_pending` also emits an SSE notify for any future stream subscriber. Thanks @Sanjays2402.
+
 ## [v0.51.533] — 2026-06-20 — Release SR (restart the gateway from the agent-health alert)
 
 ### Added

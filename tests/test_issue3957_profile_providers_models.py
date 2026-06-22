@@ -809,6 +809,7 @@ def test_account_usage_subprocess_env_strips_non_registry_agent_creds(monkeypatc
     monkeypatch.setenv("CUSTOM_API_KEY", "process-default-custom-key")
     monkeypatch.setenv("AWS_PROFILE", "process-default-aws-profile")
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "process-default-bedrock-token")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://169.254.170.2/creds")
 
     profiles.set_request_profile("work")
     try:
@@ -821,6 +822,7 @@ def test_account_usage_subprocess_env_strips_non_registry_agent_creds(monkeypatc
     assert "CUSTOM_API_KEY" not in env
     assert "AWS_PROFILE" not in env
     assert "AWS_BEARER_TOKEN_BEDROCK" not in env
+    assert "AWS_CONTAINER_CREDENTIALS_FULL_URI" not in env
 
 
 def test_detached_worker_scope_scrubs_non_registry_agent_creds(monkeypatch, tmp_path):
@@ -835,14 +837,20 @@ def test_detached_worker_scope_scrubs_non_registry_agent_creds(monkeypatch, tmp_
     monkeypatch.setenv("CUSTOM_API_KEY", "process-default-custom-key")
     monkeypatch.setenv("AWS_PROFILE", "process-default-aws-profile")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "process-default-aws-secret")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "process-default-azure-secret")
+    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "process-default-foundry-key")
 
     with profiles.profile_scope_for_detached_worker("work", "test-worker"):
         assert os.environ.get("CUSTOM_API_KEY") is None
         assert os.environ.get("AWS_PROFILE") is None
         assert os.environ.get("AWS_SECRET_ACCESS_KEY") is None
+        assert os.environ.get("AZURE_CLIENT_SECRET") is None
+        assert os.environ.get("AZURE_FOUNDRY_API_KEY") is None
         assert config._thread_local_env_value("CUSTOM_API_KEY") == ""
 
     assert os.environ.get("CUSTOM_API_KEY") == "process-default-custom-key"
     assert os.environ.get("AWS_PROFILE") == "process-default-aws-profile"
     assert os.environ.get("AWS_SECRET_ACCESS_KEY") == "process-default-aws-secret"
+    assert os.environ.get("AZURE_CLIENT_SECRET") == "process-default-azure-secret"
+    assert os.environ.get("AZURE_FOUNDRY_API_KEY") == "process-default-foundry-key"
 

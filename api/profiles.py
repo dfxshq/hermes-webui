@@ -890,19 +890,33 @@ def filter_runtime_env_for_gateway_parity(env: dict[str, str]) -> dict[str, str]
 # would miss them). Fail-closed list — verified against the installed agent:
 #   CUSTOM_API_KEY            hermes_cli/models.py (generic custom provider key)
 #   AZURE_ANTHROPIC_KEY       hermes_cli/runtime_provider.py (Azure-hosted Anthropic)
+#   AZURE_FOUNDRY_API_KEY     hermes_cli/runtime_provider.py (Azure Foundry key)
+#   AZURE_* identity family   agent/azure_identity_adapter.py (service-principal /
+#                             workload-identity model auth)
 #   AWS_BEARER_TOKEN_BEDROCK  hermes_cli/model_switch.py (Bedrock bearer token)
-#   AWS_*                     agent/bedrock_adapter.py (boto3 credential chain)
+#   AWS_* credential chain    agent/bedrock_adapter.py + model_switch._has_aws_creds
+#                             (boto3 access keys, session token, profile,
+#                              container/web-identity credential providers)
+# NOTE: region/base-url config vars (AWS_REGION, AWS_DEFAULT_REGION,
+# AZURE_FOUNDRY_BASE_URL) are deliberately NOT included — they're configuration,
+# not credentials, and the child probe may legitimately need them.
 # Stripping these in a profile-scoped read prevents an empty named profile from
 # inheriting the server-process credential (#3961 residual cross-profile leak).
 _NON_REGISTRY_AGENT_CREDENTIAL_ENV_NAMES: tuple[str, ...] = (
     "CUSTOM_API_KEY",
     "AZURE_ANTHROPIC_KEY",
+    "AZURE_FOUNDRY_API_KEY",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_TENANT_ID",
+    "AZURE_FEDERATED_TOKEN_FILE",
     "AWS_BEARER_TOKEN_BEDROCK",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
     "AWS_PROFILE",
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
     "AWS_WEB_IDENTITY_TOKEN_FILE",
 )
 

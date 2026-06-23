@@ -119,6 +119,42 @@ def test_session_visit_stale_profile_cache_revalidates_with_live_rebuild(tmp_pat
     assert calls == [{"force_refresh": True}]
 
 
+def test_session_visit_fresh_disk_hit_does_not_overwrite_newer_memory_cache(tmp_path, monkeypatch):
+    import api.config as cfg
+
+    _reset_models_memory_cache(monkeypatch)
+    stale_catalog = _catalog("stale-model")
+    rebuilt_catalog = _catalog("rebuilt-model")
+    cache_path = tmp_path / "models_cache.profile.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    now = time.time()
+    os.utime(cache_path, (now, now))
+    fingerprint = {"profile": "demo"}
+
+    monkeypatch.setattr(cfg, "_SESSION_VISIT_MODELS_FRESHNESS_SECONDS", 300.0, raising=False)
+    monkeypatch.setattr(cfg, "_get_models_cache_path", lambda: cache_path)
+    monkeypatch.setattr(cfg, "_models_cache_source_fingerprint", lambda: fingerprint)
+
+    def _disk_hit_after_newer_memory_publish():
+        cfg._available_models_cache = rebuilt_catalog
+        cfg._available_models_cache_ts = time.monotonic()
+        cfg._available_models_cache_source_fingerprint = fingerprint
+        return stale_catalog
+
+    monkeypatch.setattr(cfg, "_load_models_cache_from_disk", _disk_hit_after_newer_memory_publish)
+    monkeypatch.setattr(cfg, "_load_stale_models_cache_from_disk", lambda: None)
+    monkeypatch.setattr(
+        cfg,
+        "get_available_models",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh disk hit must not rebuild live models")
+        ),
+    )
+
+    assert cfg.get_available_models_for_session_visit() == rebuilt_catalog
+    assert cfg._available_models_cache == rebuilt_catalog
+
+
 def test_default_disk_hit_does_not_restamp_stale_cache_for_session_visit(tmp_path, monkeypatch):
     import api.config as cfg
 

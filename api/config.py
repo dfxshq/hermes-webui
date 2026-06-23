@@ -6962,6 +6962,9 @@ def get_available_models_for_session_visit() -> dict:
         disk_cached = _load_models_cache_from_disk()
         if disk_cached is not None:
             with _available_models_cache_lock:
+                cached = _get_fresh_memory_models_cache(time.monotonic())
+                if cached is not None:
+                    return cached
                 _available_models_cache = copy.deepcopy(disk_cached)
                 _available_models_cache_ts = time.monotonic()
                 _available_models_cache_source_fingerprint = _models_cache_source_fingerprint()

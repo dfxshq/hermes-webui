@@ -1256,6 +1256,15 @@
     .skeleton-bar,.skeleton-tree-row .skeleton-glyph{animation:none;background:var(--skeleton-base,color-mix(in srgb,var(--text) 10%,transparent));}
     .skeleton-row,.skeleton-tree-row,.skeleton-group-label{animation:none;}
   }
+  /* #4717: empty-profile skeleton. When the target profile is known to have zero
+     conversations, showSessionListSkeleton() renders a single quiet hint bar
+     instead of a fake content list, so the switch resolves calmly to the real
+     empty state without a misleading "loading conversations" flash. */
+  .skeleton-list-empty{padding:14px 10px;}
+  .skeleton-empty-hint{height:9px;width:42px;border-radius:var(--radius-pill);
+    background:var(--skeleton-base,color-mix(in srgb,var(--text) 8%,transparent));
+    opacity:.4;animation:skeletonFadeInDim .22s ease both;}
+  @media (prefers-reduced-motion:reduce){.skeleton-empty-hint{animation:none;}}
   .session-item.new-flash{animation:newflash 1.4s ease-out forwards;}
   .session-item.session-list-flip-enter{animation:sessionListFlipIn .28s cubic-bezier(.2,.8,.2,1) backwards;transform-origin:center top;}
   /* Collapsible date group headers */

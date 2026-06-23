@@ -5978,7 +5978,7 @@ async function switchToProfile(name) {
     // skeleton, before the new-profile cookie is set) also can't paint the old profile's
     // rows. Cleared right before the switch-owned renderSessionList() and on failure.
     if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(true);
-    if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton();
+    if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton(name);
     // invalidate any in-flight workspace-tree load UNCONDITIONALLY at switch start — even
     // when the panel is closed, loadDir('.') still runs later, and an empty-session switch
     // reuses the same session_id so loadDir's id guard alone can't reject a stale

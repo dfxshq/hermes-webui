@@ -7,6 +7,12 @@
 
 - **Settled Compact Worklog summaries keep their processed duration after session recovery or lineage merge.** When WebUI deduped duplicate assistant rows from the sidecar, state.db, or parent lineage, it could keep the copy without display-only turn metadata and drop the copy that carried `_turnDuration` / anchor scene metadata. Duplicate merges now backfill missing display metadata before discarding the duplicate, so the settled Processed Worklog can still show elapsed time.
 
+## [v0.51.617] — 2026-06-24 — Release VX (fix mobile scroll-jank to top during streaming)
+
+### Fixed
+
+- **On mobile (iOS Safari / Android Chrome), the transcript no longer randomly jumps to the top while the assistant is streaming.** The message container carried a global `overflow-anchor: none` (needed for desktop virtual-scroll position stability), but on touch browsers that made the browser paint a frame at `scrollTop=0` during the render's DOM wipe-and-rebuild, scroll-janking the reader to the oldest message mid-stream. `overflow-anchor: none` is now scoped to desktop (hover + fine-pointer) via a media query — mobile keeps the browser's native scroll anchoring — and the render briefly re-enables anchoring on touch devices across the DOM-rebuild gap. Desktop behavior is unchanged. Thanks @akrhin. (#4815, #4818)
+
 ## [v0.51.616] — 2026-06-24 — Release VW (harden recycled assistant turns + scrollbar-drag detection)
 
 ### Fixed

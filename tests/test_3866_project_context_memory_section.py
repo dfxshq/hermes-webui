@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import api.profiles
 import api.routes as routes
+import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
@@ -224,7 +225,7 @@ def test_memory_detail_renders_path_for_non_project_sections():
     show `MEMORY.md · <path>` using the existing pinned header row pattern.
     """
     if NODE is None:
-        return
+        pytest.skip("node not on PATH")
 
     rendered = _run_memory_render_harness()
 

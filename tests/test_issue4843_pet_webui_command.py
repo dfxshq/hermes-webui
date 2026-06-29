@@ -12,7 +12,15 @@ COMMANDS_JS = (REPO_ROOT / "static" / "commands.js").read_text(encoding="utf-8")
 MESSAGES_JS = (REPO_ROOT / "static" / "messages.js").read_text(encoding="utf-8")
 
 
-def _run_pet_js(*, status, adapter_status=None, hook_result=None, hook_throws=False, command="/pet feed tuna"):
+def _run_pet_js(
+    *,
+    status,
+    adapter_status=None,
+    status_throws=False,
+    hook_result=None,
+    hook_throws=False,
+    command="/pet feed tuna",
+):
     hook_setup = ""
     if hook_throws:
         hook_setup += textwrap.dedent(
@@ -37,17 +45,27 @@ def _run_pet_js(*, status, adapter_status=None, hook_result=None, hook_throws=Fa
         f"""
         const vm = require('vm');
         const hookCalls = [];
+        const consoleErrors = [];
+        const captureConsole = {{
+          ...console,
+          error: (...args) => {{
+            consoleErrors.push(args.map(arg => String(arg && arg.message ? arg.message : arg)).join(' '));
+          }},
+        }};
         const window = {{
           __HERMES_WEBUI_DESKTOP_COMPANION_STATUS__: {json.dumps(adapter_status)},
         }};
         window.window = window;
         const ctx = {{
-          console,
+          console: captureConsole,
           window,
           localStorage: {{ getItem(){{return null;}}, setItem(){{}}, removeItem(){{}} }},
           t: key => key,
           api: async path => {{
-            if (path === '/api/extensions/status') return {json.dumps(status)};
+            if (path === '/api/extensions/status') {{
+              if ({json.dumps(status_throws)}) throw new Error('extensions api failed');
+              return {json.dumps(status)};
+            }}
             throw new Error('unexpected api path: ' + path);
           }},
         }};
@@ -56,7 +74,7 @@ def _run_pet_js(*, status, adapter_status=None, hook_result=None, hook_throws=Fa
         vm.runInContext({json.dumps(COMMANDS_JS)}, ctx);
         (async () => {{
           const result = await vm.runInContext(`(async () => {{ return await handlePetSlashCommand({json.dumps(command)}, {{name:'pet'}}); }})()`, ctx);
-          process.stdout.write(JSON.stringify({{result, hookCalls}}));
+          process.stdout.write(JSON.stringify({{result, hookCalls, consoleErrors}}));
         }})().catch(err => {{
           console.error(err && err.stack || err);
           process.exit(1);
@@ -73,7 +91,24 @@ def _run_pet_js(*, status, adapter_status=None, hook_result=None, hook_throws=Fa
     return json.loads(proc.stdout)
 
 
-def _run_send_js(*, command, status, adapter_status=None):
+def _run_send_js(*, command, status, adapter_status=None, hook_result=None, hook_throws=False):
+    hook_setup = ""
+    if hook_throws:
+        hook_setup += textwrap.dedent(
+            """
+            ctx.window.__hermesHandlePetSlashCommand = async payload => {
+              throw new Error('hook failed');
+            };
+            """
+        )
+    elif hook_result is not None:
+        hook_setup += textwrap.dedent(
+            f"""
+            ctx.window.__hermesHandlePetSlashCommand = async payload => {{
+              return {json.dumps(hook_result)};
+            }};
+            """
+        )
     script = textwrap.dedent(
         f"""
         const vm = require('vm');
@@ -183,6 +218,7 @@ def _run_send_js(*, command, status, adapter_status=None):
         ctx.window.window = ctx.window;
         vm.createContext(ctx);
         vm.runInContext({json.dumps(COMMANDS_JS)}, ctx);
+        {hook_setup}
         vm.runInContext({json.dumps(MESSAGES_JS)}, ctx);
         (async () => {{
           await vm.runInContext('send()', ctx);
@@ -313,7 +349,7 @@ def test_pet_help_hands_off_to_desktop_companion_hook_when_connected():
         command="/pet   feed  tuna  ",
     )
 
-    assert result["result"] == {"handled": True, "message": ""}
+    assert result["result"] == {"handled": True, "message": "mascot handled"}
     assert result["hookCalls"] == [
         {
             "command": "/pet   feed  tuna  ",
@@ -354,8 +390,22 @@ def test_pet_help_treats_truthy_hook_result_as_handled():
     ]
 
 
-def test_pet_help_falls_back_when_hook_is_missing_or_fails():
-    absent = _run_pet_js(
+def test_pet_help_routes_to_status_error_when_extension_status_api_fails():
+    result = _run_pet_js(
+        status={"enabled": False, "extensions": []},
+        status_throws=True,
+        adapter_status=None,
+    )
+
+    assert result["result"]["handled"] is False
+    assert result["result"]["message"] == (
+        "Desktop Companion status is unavailable right now.\n\n"
+        "Reload WebUI or check your connection, then retry /pet."
+    )
+
+
+def test_pet_help_falls_back_to_unavailable_guidance_when_hook_is_missing():
+    result = _run_pet_js(
         status={
             "enabled": True,
             "extensions": [
@@ -370,7 +420,17 @@ def test_pet_help_falls_back_when_hook_is_missing_or_fails():
         },
         adapter_status={"connected": True},
     )
-    failed = _run_pet_js(
+
+    message = result["result"]["message"]
+    assert result["result"]["handled"] is False
+    assert "Desktop Companion is installed and connected" in message
+    assert "/pet is not available yet in this Desktop Companion version" in message
+    assert "Update the Desktop Companion app" in message
+    assert "https://github.com/franksong2702/hermes-webui-desktop-companion#after-gallery-install" in message
+
+
+def test_pet_help_routes_to_hook_error_guidance_when_hook_throws():
+    result = _run_pet_js(
         status={
             "enabled": True,
             "extensions": [
@@ -387,13 +447,13 @@ def test_pet_help_falls_back_when_hook_is_missing_or_fails():
         hook_throws=True,
     )
 
-    for result in (absent, failed):
-        message = result["result"]["message"]
-        assert result["result"]["handled"] is False
-        assert "Desktop Companion is installed and connected" in message
-        assert "/pet is not available yet in this Desktop Companion version" in message
-        assert "Update the Desktop Companion app" in message
-        assert "https://github.com/franksong2702/hermes-webui-desktop-companion#after-gallery-install" in message
+    assert result["result"]["handled"] is False
+    assert result["result"]["message"] == (
+        "Desktop Companion is installed and connected, but it hit an error while handling /pet.\n\n"
+        "Check the browser console and the Desktop Companion app, then retry /pet."
+    )
+    assert any("Desktop Companion /pet hook error:" in entry for entry in result["consoleErrors"])
+    assert any("hook failed" in entry for entry in result["consoleErrors"])
 
 
 def test_pet_slash_intercept_bypasses_generic_agent_execution():
@@ -417,3 +477,52 @@ def test_pet_slash_intercept_bypasses_generic_agent_execution():
     assert [item["role"] for item in browser["messages"]] == ["user", "assistant"]
     assert "`/browser` is a Hermes CLI-only command" in browser["messages"][1]["content"]
     assert browser["commandExecCalls"] == []
+
+
+def test_pet_send_uses_extension_message_when_hook_returns_one():
+    result = _run_send_js(
+        command="/pet feed tuna",
+        status={
+            "enabled": True,
+            "extensions": [
+                {
+                    "id": "desktop-companion",
+                    "name": "Desktop Companion",
+                    "effective_enabled": True,
+                    "user_disabled": False,
+                    "status": "enabled",
+                }
+            ],
+        },
+        adapter_status={"connected": True},
+        hook_result={"handled": True, "message": "mascot handled"},
+    )
+
+    assert [item["role"] for item in result["messages"]] == ["user", "assistant"]
+    assert result["messages"][1]["content"] == "mascot handled"
+    assert result["commandExecCalls"] == []
+    assert result["remainingInput"] == ""
+
+
+def test_pet_send_leaves_chat_reply_to_extension_when_hook_handles_silently():
+    result = _run_send_js(
+        command="/pet wave",
+        status={
+            "enabled": True,
+            "extensions": [
+                {
+                    "id": "desktop-companion",
+                    "name": "Desktop Companion",
+                    "effective_enabled": True,
+                    "user_disabled": False,
+                    "status": "enabled",
+                }
+            ],
+        },
+        adapter_status={"connected": True},
+        hook_result=True,
+    )
+
+    assert [item["role"] for item in result["messages"]] == ["user"]
+    assert result["commandExecCalls"] == []
+    assert result["remainingInput"] == ""

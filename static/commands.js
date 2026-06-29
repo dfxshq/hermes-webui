@@ -100,21 +100,33 @@ Start or connect the ${DESKTOP_COMPANION_LOCAL_APP_LABEL}, then retry /pet.
 Setup guide: ${DESKTOP_COMPANION_SETUP_GUIDE_URL}`;
 }
 
+function _desktopCompanionStatusUnavailableMessage(){
+  return `${DESKTOP_COMPANION_NAME} status is unavailable right now.
+
+Reload WebUI or check your connection, then retry /pet.`;
+}
+
 function _desktopCompanionUnavailableMessage(){
   return `${DESKTOP_COMPANION_NAME} is installed and connected, but /pet is not available yet in this Desktop Companion version.
 
 Update the ${DESKTOP_COMPANION_LOCAL_APP_LABEL}, then follow the setup guide: ${DESKTOP_COMPANION_SETUP_GUIDE_URL}.`;
 }
 
+function _desktopCompanionHookErrorMessage(){
+  return `${DESKTOP_COMPANION_NAME} is installed and connected, but it hit an error while handling /pet.
+
+Check the browser console and the ${DESKTOP_COMPANION_LOCAL_APP_LABEL}, then retry /pet.`;
+}
+
 async function handlePetSlashCommand(rawCommandText,meta){
   const command=String(rawCommandText||'');
   const commandName=String((meta&&meta.name)||'pet').trim()||'pet';
   const args=_petSlashCommandArgs(command);
-  let status=null;
+  let status;
   try{
     status=await api('/api/extensions/status');
   }catch(_e){
-    status=null;
+    return {handled:false,message:_desktopCompanionStatusUnavailableMessage()};
   }
   const companion=_getDesktopCompanionExtensionStatus(status);
   if(!companion){
@@ -140,9 +152,19 @@ async function handlePetSlashCommand(rawCommandText,meta){
         metadata:{name:commandName},
       });
       if(result){
-        return {handled:true,message:''};
+        return {
+          handled:true,
+          message:result&&typeof result==='object'&&'message' in result
+            ? String(result.message||'')
+            : '',
+        };
       }
-    }catch(_e){}
+    }catch(_e){
+      if(typeof console!=='undefined'&&console.error){
+        console.error('[hermes] Desktop Companion /pet hook error:',_e);
+      }
+      return {handled:false,message:_desktopCompanionHookErrorMessage()};
+    }
   }
   return {handled:false,message:_desktopCompanionUnavailableMessage()};
 }

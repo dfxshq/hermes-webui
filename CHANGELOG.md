@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **The Kanban "New task" modal now exposes skills, max runtime, and parent dependencies.** The WebUI task creator reaches parity with the CLI Kanban fields: a Skills input (comma-separated, e.g. `python,git`), a Max runtime (seconds) field (empty = unlimited), and a Parent dependencies (task ID) field. Max-runtime input is validated (`/^[1-9]\d*$/`) with an inline localized error so a junk value can't silently become 1 or unlimited; all fields are XSS-safe. Thanks @rodboev. (#4881, #4470)
+
 - **Mermaid diagrams in chat now have on-diagram zoom / pan / fit / fullscreen controls.** A GitHub-style toolbar (zoom in, zoom out, reset, fit, fullscreen) mounts on each rendered Mermaid diagram so large flowcharts are navigable in place instead of static; zoom is clamped 0.25×–8×, a drag is suppressed from opening the lightbox accidentally while a clean click still opens it, and the Mermaid source is HTML-escaped (no XSS). Thanks @rodboev. (#4871, #4814)
 
 - **Mobile titlebar now prioritizes the session title, with tap-to-reveal and long-press actions.** On mobile the titlebar gives the session title priority (ellipsized when long) over surrounding chrome; tapping the title reveals the full title in a popover, and a long-press opens the session actions. Listener-leak-safe (tap wired once per element, outside-click handler cleaned up on dismiss/switch; long-press guarded against double-fire, cancelled on touchmove). Read-only sessions are skipped, and desktop is untouched (touch-gated). Thanks @rodboev. (#4574, #4520)

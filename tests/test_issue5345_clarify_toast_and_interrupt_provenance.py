@@ -28,8 +28,6 @@ missing route (server predates the endpoint) or an unrelated session-scoped 404.
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 MESSAGES_JS = (ROOT / "static" / "messages.js").read_text(encoding="utf-8")
 BOOT_JS = (ROOT / "static" / "boot.js").read_text(encoding="utf-8")

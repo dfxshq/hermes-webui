@@ -2520,10 +2520,11 @@ async function populateModelDropdown(opts={}){
       renderModelDropdown();
       _positionModelDropdown();
     }
+    const willRetry=usedConfiguredFallback && requestedFreshness!=='session_visit' && !_modelCatalogFallbackRetried;
     // Kick off a background live-model fetch for the active provider.
     // This runs after the static list is already shown (no blocking flicker).
-    if(data.active_provider) _fetchLiveModels(data.active_provider, sel, requestSeq);
-    if(usedConfiguredFallback && requestedFreshness!=='session_visit' && !_modelCatalogFallbackRetried){
+    if(data.active_provider && !willRetry) _fetchLiveModels(data.active_provider, sel, requestSeq);
+    if(willRetry){
       _modelCatalogFallbackRetried=true;
       populateModelDropdown({...opts,freshness:'session_visit'}).catch(()=>{});
     }

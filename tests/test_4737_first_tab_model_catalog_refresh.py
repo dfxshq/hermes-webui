@@ -121,6 +121,7 @@ function buildHarness(currentScenario) {
   const select = new FakeSelect();
   const dropdown = new FakeNode('div');
   const fetchCalls = [];
+  const liveFetchCalls = [];
   const defaultRedirectCalls = [];
   const customRedirectCalls = [];
   const fetchQueue = (currentScenario.fetchResponses || []).map((payload) => buildFetchResponse(
@@ -168,18 +169,20 @@ function buildHarness(currentScenario) {
     return res.status === 401;
   };
   globalThis.console = { warn() {}, debug() {}, log() {} };
-  globalThis._fetchLiveModels = () => {};
+  globalThis._fetchLiveModels = (provider, sel, requestSeq) => {
+    liveFetchCalls.push([provider, sel && sel.id ? sel.id : null, requestSeq]);
+  };
   globalThis.fetch = async (url) => {
     fetchCalls.push(String(url));
     if (!fetchQueue.length) throw new Error(`unexpected fetch: ${url}`);
     return fetchQueue.shift();
   };
 
-  return { select, fetchCalls, defaultRedirectCalls, customRedirectCalls };
+  return { select, fetchCalls, liveFetchCalls, defaultRedirectCalls, customRedirectCalls };
 }
 
 async function runScenario(currentScenario) {
-  const { select, fetchCalls, defaultRedirectCalls, customRedirectCalls } = buildHarness(currentScenario);
+  const { select, fetchCalls, liveFetchCalls, defaultRedirectCalls, customRedirectCalls } = buildHarness(currentScenario);
   let _modelDropdownRequestSeq = 0;
   let _modelCatalogFallbackRetried = false;
   eval(fnSource);
@@ -198,6 +201,7 @@ async function runScenario(currentScenario) {
     customRedirectCalls,
     defaultRedirectCalls,
     fetchCalls,
+    liveFetchCalls,
     optionValues: select.options.map((opt) => opt.value),
   };
 }
@@ -299,6 +303,7 @@ def test_populate_model_dropdown_refetches_once_when_server_returns_empty_groups
 
     assert len(payload["fetchCalls"]) == 2
     assert "freshness=session_visit" in payload["fetchCalls"][1]
+    assert payload["liveFetchCalls"] == [["anthropic", "modelSelect", 2]]
     assert "claude-opus-4" in payload["optionValues"]
 
 

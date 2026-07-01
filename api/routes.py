@@ -6644,7 +6644,7 @@ def _is_claimable_cli_source(cli_meta: dict, state_db_source: str = "") -> tuple
     # in a future log / user-visible diagnostic.
     cli_meta_source_tag = (cm.get("source_tag") or cm.get("raw_source") or "").strip().lower()
     if cli_meta_source_tag in {"claude_code", "cron", "external_agent",
-                                "gateway", "messaging", "unknown"}:
+                                "gateway", "messaging", "subagent", "unknown"}:
         # gateway/unknown are the platformless gateway fallbacks
         # (gateway/run.py, gateway/slash_commands.py) — they own the
         # conversation in the gateway, not in WebUI.
@@ -6663,7 +6663,7 @@ def _is_claimable_cli_source(cli_meta: dict, state_db_source: str = "") -> tuple
     if not cli_meta_source_tag and state_db_source:
         state_db_source_tag = state_db_source.strip().lower()
         if state_db_source_tag in {"claude_code", "cron", "messaging",
-                                    "external_agent", "gateway", "unknown"}:
+                                    "external_agent", "gateway", "subagent", "unknown"}:
             return False, f"state_db_source={state_db_source_tag}"
     return True, ""
 
@@ -6740,7 +6740,7 @@ def _claim_or_synthesize_cli_session(sid: str, cli_meta: dict = None):
                 workspace = "/"
         return workspace
 
-    def build_session(sid, cli_meta, msgs, read_only_flag):
+    def build_session(sid, cli_meta, msgs, read_only_flag, is_cli_flag=True):
         return Session(
             session_id=sid,
             title=(cli_meta or {}).get("title") or "CLI Session",
@@ -6751,7 +6751,13 @@ def _claim_or_synthesize_cli_session(sid: str, cli_meta: dict = None):
             created_at=(cli_meta or {}).get("created_at") or 0,
             updated_at=(cli_meta or {}).get("updated_at") or 0,
             profile=(cli_meta or {}).get("profile"),
-            is_cli_session=True,
+            # ``is_cli_flag`` is True for genuine CLI/TUI/Desktop sessions so the
+            # sidebar renders the source badge and the client's external-session
+            # gating applies. It is False for delegated subagent children (#5307):
+            # they are recovered read-only and must NOT be CLI-classified, or they
+            # would pass the frontend ``_isExternalSession`` poll-skip /
+            # active-refresh gates that #3603 keeps narrow.
+            is_cli_session=is_cli_flag,
             source_tag=(cli_meta or {}).get("source_tag"),
             raw_source=(cli_meta or {}).get("raw_source"),
             session_source=(cli_meta or {}).get("session_source"),
@@ -6853,7 +6859,19 @@ def _claim_or_synthesize_cli_session(sid: str, cli_meta: dict = None):
         # readonly=True so the GET stub keeps rendering the original
         # read-only badge, and return 'not_claimable' so the POST path
         # 403s instead of bare-404ing.
-        return build_session(sid, cli_meta, msgs, read_only_flag=True), "not_claimable"
+        #
+        # Delegated subagent children (#5307) additionally must NOT be
+        # CLI-classified: they are recovered read-only for viewing, but
+        # is_cli_session=True would let them pass the frontend
+        # _isExternalSession poll-skip / active-refresh gates that #3603
+        # keeps narrow. Every other non-claimable foreign source keeps the
+        # CLI classification so its source badge renders.
+        _sa_child = _is_subagent_child_session_id(sid)
+        return (
+            build_session(sid, cli_meta, msgs, read_only_flag=True,
+                          is_cli_flag=not _sa_child),
+            "not_claimable",
+        )
     return build_session(sid, cli_meta, msgs, read_only_flag=False), "materialized"
 
 

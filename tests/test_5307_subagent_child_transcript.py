@@ -168,16 +168,16 @@ def test_was_webui_gate_excludes_subagent_children():
     ), "was_webui and not subagent-child must gate the same 404 return (#5307)"
 
 
-def test_sessions_js_uses_wider_import_predicate():
-    """All transcript-load import_cli sites must gate on
-    _sessionNeedsServerImportForLoad so subagent children trigger the
-    server-side merge; the poll-skip / active-refresh gating stays keyed on the
-    narrower _isExternalSession."""
+def test_sessions_js_open_handlers_keep_isexternalsession_contract():
+    """The fix is server-side + view-only, so sessions.js must be UNCHANGED —
+    the #3603 contract that the open/tap/child handlers gate on
+    _isExternalSession is preserved (subagent children are recovered read-only
+    by the server, not by widening the client import trigger)."""
     js = SESSIONS_JS.read_text(encoding="utf-8")
-    assert "function _isSubagentChildSession(" in js
-    assert "function _sessionNeedsServerImportForLoad(" in js
-    assert js.count("_sessionNeedsServerImportForLoad(") >= 4, (
-        "expected the helper definition + 3 load/tap call sites"
+    # We did NOT add a widened import predicate — recovery is server-side.
+    assert "_sessionNeedsServerImportForLoad" not in js, (
+        "the #5307 fix is server-side (read-only recovery); the client import "
+        "predicate must NOT be widened (preserves #3603's _isExternalSession contract)"
     )
 
 
@@ -186,12 +186,15 @@ def test_sessions_js_uses_wider_import_predicate():
 # ---------------------------------------------------------------------------
 
 
-def test_subagent_child_indexed_as_webui_is_not_404_was_webui(
+def test_subagent_child_indexed_as_webui_recovers_readonly_not_404(
     routes_module, isolated_state_db
 ):
     """A subagent child (source='subagent' in state.db) registered in the WebUI
-    index as a webui-lineage row must NOT return 'was_webui' — it must recover
-    its state.db transcript (#5307)."""
+    index as a webui-lineage row must NOT return 'was_webui' (404). It must
+    recover its state.db transcript VIEW-ONLY: reason='not_claimable', a Session
+    is returned, read_only=True, and it is NOT CLI-classified/writable (#5307 +
+    Codex hardening — a delegated child must not become a writable imported
+    session)."""
     _make_state_db(
         isolated_state_db["db"], "subagent-child-1",
         source="subagent", title="delegate child", message_count=2,
@@ -206,9 +209,22 @@ def test_subagent_child_indexed_as_webui_is_not_404_was_webui(
     )
 
     sess, reason = routes_module._claim_or_synthesize_cli_session("subagent-child-1")
-    assert reason != "was_webui", (
-        f"subagent child must not 404 as a deleted WebUI session; got reason={reason!r}"
+    assert reason == "not_claimable", (
+        f"subagent child must recover view-only (not_claimable), not 404 or "
+        f"become writable; got reason={reason!r}"
     )
+    assert sess is not None, "the read-only transcript session must be returned"
+    # View-only: must be read_only and must NOT be a writable CLI-classified session.
+    assert getattr(sess, "read_only", False) is True, (
+        "recovered subagent child must be read_only (not writable)"
+    )
+    assert getattr(sess, "is_cli_session", False) is not True, (
+        "recovered subagent child must NOT be CLI-classified (would widen "
+        "poll-skip/active-refresh gating)"
+    )
+    # And it carries the state.db transcript.
+    msgs = getattr(sess, "messages", None)
+    assert msgs and len(msgs) >= 2, "the state.db transcript must be recovered"
 
 
 def test_deleted_webui_session_still_returns_was_webui(

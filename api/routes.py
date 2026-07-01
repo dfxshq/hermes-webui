@@ -5813,9 +5813,38 @@ def _read_profile_model_config(
     return _provider, _default
 
 
+def _load_profile_config_dict(session) -> dict | None:
+    """Load the session profile's config.yaml as a dict, or None."""
+    if not getattr(session, "profile", None):
+        return None
+    try:
+        from api.profiles import get_hermes_home_for_profile
+
+        _profile_cfg_path = os.path.join(
+            str(get_hermes_home_for_profile(session.profile)),
+            "config.yaml",
+        )
+        if not os.path.isfile(_profile_cfg_path):
+            return None
+        import yaml
+
+        with open(_profile_cfg_path, encoding="utf-8") as _f:
+            _pcfg = yaml.safe_load(_f) or {}
+        return _pcfg if isinstance(_pcfg, dict) else None
+    except Exception:
+        logger.warning(
+            "profile config read failed for %r",
+            getattr(session, "profile", None),
+            exc_info=True,
+        )
+        return None
+
+
 def _repair_bare_custom_provider_model(
     bare_model: str,
     provider: str | None,
+    *,
+    config_obj: dict | None = None,
 ) -> str | None:
     """Re-qualify a bare model ID using the named custom provider's config (#5314).
 
@@ -5823,51 +5852,55 @@ def _repair_bare_custom_provider_model(
     of a registered id on ``custom_providers``; otherwise None. Model ids are
     scanned in config declaration order (default ``model`` first, then
     ``models`` dict keys) so repair is deterministic when suffixes collide.
-    """
-    model = str(bare_model or "").strip()
-    prov = _clean_session_model_provider(provider)
-    if not model or "/" in model or not prov:
-        return None
-    if prov != "custom" and not str(prov).startswith("custom:"):
-        return None
-    try:
-        from api.config import cfg as _active_cfg
 
-        _custom_cfg = (
-            _active_cfg.get("custom_providers", [])
-            if isinstance(_active_cfg, dict)
-            else []
-        )
+    When ``config_obj`` is set (typically the session profile's config.yaml),
+    only that object's ``custom_providers`` are scanned. Otherwise falls back
+    to the process-global config for backward-compatible test stubs.
+    """
+    try:
+        model = str(bare_model or "").strip()
+        prov = _clean_session_model_provider(provider)
+        if not model or "/" in model or not prov:
+            return None
+        if prov != "custom" and not str(prov).startswith("custom:"):
+            return None
+        from api.config import _custom_provider_entries, cfg as _active_cfg
+
+        if isinstance(config_obj, dict):
+            _entries = _custom_provider_entries(config_obj)
+        else:
+            _entries = _custom_provider_entries(
+                _active_cfg if isinstance(_active_cfg, dict) else None
+            )
+        _cp_name = str(prov.split(":", 1)[1] if ":" in prov else "").strip()
+        if not _cp_name:
+            return None
+        _cp_name_lower = _cp_name.lower()
+        _matching_cp = None
+        for _entry in _entries:
+            _entry_name = str(_entry.get("name") or "").strip().lower()
+            if _entry_name == _cp_name_lower:
+                _matching_cp = _entry
+                break
+        if not _matching_cp:
+            return None
+        _ordered_ids: list[str] = []
+        _cp_model = str(_matching_cp.get("model") or "").strip()
+        if _cp_model:
+            _ordered_ids.append(_cp_model)
+        _cp_models = _matching_cp.get("models")
+        if isinstance(_cp_models, dict):
+            for _key in _cp_models.keys():
+                if isinstance(_key, str):
+                    _kid = _key.strip()
+                    if _kid and _kid not in _ordered_ids:
+                        _ordered_ids.append(_kid)
+        for _id in _ordered_ids:
+            if "/" in _id and _id.rsplit("/", 1)[-1] == model:
+                return _id
+        return None
     except Exception:
         return None
-    _cp_name = prov.split(":", 1)[1] if ":" in prov else ""
-    if not _cp_name or not isinstance(_custom_cfg, list):
-        return None
-    _matching_cp = None
-    for _entry in _custom_cfg:
-        if (
-            isinstance(_entry, dict)
-            and _entry.get("name", "").strip().lower() == _cp_name.lower()
-        ):
-            _matching_cp = _entry
-            break
-    if not _matching_cp:
-        return None
-    _ordered_ids: list[str] = []
-    _cp_model = (_matching_cp.get("model") or "").strip()
-    if _cp_model:
-        _ordered_ids.append(_cp_model)
-    _cp_models = _matching_cp.get("models")
-    if isinstance(_cp_models, dict):
-        for _key in _cp_models.keys():
-            if isinstance(_key, str) and _key.strip():
-                _kid = _key.strip()
-                if _kid not in _ordered_ids:
-                    _ordered_ids.append(_kid)
-    for _id in _ordered_ids:
-        if "/" in _id and _id.rsplit("/", 1)[-1] == model:
-            return _id
-    return None
 
 
 def _resolve_compatible_session_model_state(
@@ -5876,6 +5909,7 @@ def _resolve_compatible_session_model_state(
     *,
     profile_provider: str | None = None,
     profile_default_model: str | None = None,
+    profile_config: dict | None = None,
     explicit_model_pick: bool = False,
     prefer_cached_catalog: bool = False,
 ) -> tuple[str, str | None, bool]:
@@ -5951,7 +5985,9 @@ def _resolve_compatible_session_model_state(
                 return _profile_default, requested_provider, True
 
             _repaired_model = _repair_bare_custom_provider_model(
-                model, requested_provider
+                model,
+                requested_provider,
+                config_obj=profile_config,
             )
             if _repaired_model:
                 return _repaired_model, requested_provider, True
@@ -6055,7 +6091,11 @@ def _resolve_compatible_session_model_state(
         ):
             return _profile_default, profile_provider, True
 
-        _repaired_model = _repair_bare_custom_provider_model(model, profile_provider)
+        _repaired_model = _repair_bare_custom_provider_model(
+            model,
+            profile_provider,
+            config_obj=profile_config,
+        )
         if _repaired_model:
             return _repaired_model, profile_provider, True
 
@@ -6316,11 +6356,13 @@ def _resolve_effective_session_model_for_display(session) -> str:
     original_model = getattr(session, "model", None) or ""
     requested_provider = getattr(session, "model_provider", None)
     _pp_provider, _pp_default = _read_profile_model_config(session, requested_provider)
+    _pp_cfg = _load_profile_config_dict(session)
     effective_model, _provider, _changed = _resolve_compatible_session_model_state(
         original_model or None,
         requested_provider,
         profile_provider=_pp_provider,
         profile_default_model=_pp_default,
+        profile_config=_pp_cfg,
         # GET /api/session is a hot, side-effect-free per-tab/per-poll path.
         # It must never pay the cold live provider-catalog rebuild (a
         # botocore IMDS probe that cannot resolve on a non-AWS / WSL / corp
@@ -6339,11 +6381,13 @@ def _resolve_effective_session_model_provider_for_display(session) -> str | None
     original_model = getattr(session, "model", None) or ""
     requested_provider = getattr(session, "model_provider", None)
     _pp_provider, _pp_default = _read_profile_model_config(session, requested_provider)
+    _pp_cfg = _load_profile_config_dict(session)
     _model, provider, _changed = _resolve_compatible_session_model_state(
         original_model or None,
         requested_provider,
         profile_provider=_pp_provider,
         profile_default_model=_pp_default,
+        profile_config=_pp_cfg,
         # See _resolve_effective_session_model_for_display: same hot
         # side-effect-free GET /api/session path; must not trigger the cold
         # live rebuild. prefer_cached_catalog resolves from warm/disk cache
@@ -18498,11 +18542,13 @@ def start_session_turn(
     # without the profile defaults the resolver would fall back to the global
     # DEFAULT_MODEL instead of the profile's configured default (greptile flag).
     _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
+    _pp_cfg = _load_profile_config_dict(s)
     model, model_provider, normalized_model = _resolve_compatible_session_model_state(
         requested_model,
         requested_provider,
         profile_provider=_pp_provider,
         profile_default_model=_pp_default,
+        profile_config=_pp_cfg,
         prefer_cached_catalog=True,
     )
     resp = _start_run(
@@ -18673,11 +18719,13 @@ def _handle_goal_command(handler, body):
             else getattr(s, "model_provider", None)
         )
         _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
+        _pp_cfg = _load_profile_config_dict(s)
         model, model_provider, normalized_model = _resolve_compatible_session_model_state(
             requested_model,
             requested_provider,
             profile_provider=_pp_provider,
             profile_default_model=_pp_default,
+            profile_config=_pp_cfg,
         )
         previous_goal_state = goal_state_snapshot(s.session_id, profile_home=profile_home)
 
@@ -18724,11 +18772,13 @@ def _handle_goal_command(handler, body):
                 else getattr(s, "model_provider", None)
             )
             _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
+            _pp_cfg = _load_profile_config_dict(s)
             model, model_provider, normalized_model = _resolve_compatible_session_model_state(
                 requested_model,
                 requested_provider,
                 profile_provider=_pp_provider,
                 profile_default_model=_pp_default,
+                profile_config=_pp_cfg,
             )
         stream_response = _start_chat_stream_for_session(
             s,
@@ -18869,6 +18919,7 @@ def _handle_chat_start(handler, body, diag=None):
             else getattr(s, "model_provider", None)
         )
         _pp_provider, _pp_default = _read_profile_model_config(s, requested_provider)
+        _pp_cfg = _load_profile_config_dict(s)
         explicit_model_pick = bool(body.get("explicit_model_pick"))
         moa_config = None
         if body.get("moa_config"):
@@ -18886,6 +18937,7 @@ def _handle_chat_start(handler, body, diag=None):
             requested_provider,
             profile_provider=_pp_provider,
             profile_default_model=_pp_default,
+            profile_config=_pp_cfg,
             explicit_model_pick=explicit_model_pick,
         )
         # NOTE: runtime-adapter selection is delegated to _start_run (shared
@@ -18983,11 +19035,13 @@ def _handle_chat_sync(handler, body):
             body.get("model_provider") if "model_provider" in body else getattr(s, "model_provider", None)
         )
         _pp_provider, _pp_default = _read_profile_model_config(s, _sync_requested_provider)
+        _pp_cfg = _load_profile_config_dict(s)
         model, model_provider = _resolve_compatible_session_model_state(
             body.get("model") or s.model,
             _sync_requested_provider,
             profile_provider=_pp_provider,
             profile_default_model=_pp_default,
+            profile_config=_pp_cfg,
         )[:2]
         s.model = model
         s.model_provider = model_provider

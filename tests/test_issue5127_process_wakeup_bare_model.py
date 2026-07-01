@@ -127,6 +127,7 @@ class TestIssue5127CustomProviderBareSuffixRepair:
                 "custom:my-proxy",
                 profile_provider="custom:my-proxy",
                 profile_default_model="umans/umans-glm-5.2",
+                profile_config=_mock_cfg,
                 prefer_cached_catalog=True,
             )
 
@@ -162,6 +163,7 @@ class TestIssue5127CustomProviderBareSuffixRepair:
                 None,
                 profile_provider="custom:my-proxy",
                 profile_default_model="umans/umans-glm-5.2",
+                profile_config=_mock_cfg,
                 prefer_cached_catalog=True,
             )
 
@@ -225,6 +227,47 @@ class TestRepairBareCustomProviderModel:
             assert _repair_bare_custom_provider_model(
                 "shared-suffix", "custom:llm-proxy"
             ) == "org-a/shared-suffix"
+
+    def test_malformed_custom_provider_name_fails_closed(self):
+        from api.routes import _repair_bare_custom_provider_model
+
+        bad_cfg = {
+            "custom_providers": [
+                {"name": None, "models": {"vendor/ok-model": {}}},
+                {"name": "good-proxy", "models": {"vendor/ok-model": {}}},
+            ]
+        }
+        assert _repair_bare_custom_provider_model(
+            "ok-model",
+            "custom:good-proxy",
+            config_obj=bad_cfg,
+        ) == "vendor/ok-model"
+
+    def test_profile_config_scoped_not_global_cfg(self):
+        from api.routes import _repair_bare_custom_provider_model
+
+        profile_cfg = {
+            "custom_providers": [
+                {
+                    "name": "team",
+                    "models": {"profile-vendor/shared": {}},
+                }
+            ]
+        }
+        global_cfg = {
+            "custom_providers": [
+                {
+                    "name": "team",
+                    "models": {"wrong-vendor/shared": {}},
+                }
+            ]
+        }
+        with patch("api.config.cfg", global_cfg):
+            assert _repair_bare_custom_provider_model(
+                "shared",
+                "custom:team",
+                config_obj=profile_cfg,
+            ) == "profile-vendor/shared"
 
 
 class TestReadProfileModelConfigWithExplicitProvider:

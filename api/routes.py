@@ -11290,6 +11290,15 @@ def handle_get(handler, parsed) -> bool:
                 raw["model"] = effective_model
             if effective_provider:
                 raw["model_provider"] = effective_provider
+            # A subagent child (#5307) is view-only regardless of what a stale
+            # sidecar stored: coerce the serialized flags so the browser never
+            # treats an existing subagent sidecar as writable / CLI-classified.
+            if (
+                (str(raw.get("source_tag") or raw.get("raw_source") or raw.get("session_source") or "").strip().lower() == "subagent")
+                or _is_subagent_child_session_id(sid)
+            ):
+                raw["is_cli_session"] = False
+                raw["read_only"] = True
             redact = redact_session_data(raw)
             _t5 = _time.monotonic()
             resp = j(handler, {"session": redact})

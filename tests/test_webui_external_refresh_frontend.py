@@ -122,6 +122,19 @@ def test_session_event_profile_filter_tolerates_default_root_aliases():
     assert "S.activeProfileIsDefault = !!data.is_default;" in PANELS_JS
 
 
+def test_session_list_render_signature_ignores_non_display_session_fields():
+    start = SESSIONS_JS.find("function _sessionListRenderSignature()")
+    assert start != -1
+    block = SESSIONS_JS[start:start + 1500]
+    assert "const sessionKeys = [" in block
+    assert "const sessionsSlim = Array.isArray(_allSessions)" in block
+    assert "sessionKeys.forEach" in block
+    assert "_allSessions," not in block
+    assert "message_count" in block
+    assert "last_message_at" in block
+    assert "_compression_segment_count" in block
+
+
 def test_pwa_pull_to_refresh_refreshes_session_list_not_page_when_available():
     assert "window.refreshSessionList('pull', {force:true, refreshActive:true})" in UI_JS
     assert "Promise.resolve(window.refreshSessionList('pull', {force:true, refreshActive:true})).catch(()=>{}).finally(_ptrReset)" in UI_JS

@@ -4357,8 +4357,21 @@ let _lastSessionListRenderSig = null;
 function _sessionListRenderSignature(){
   try{
     const search=($('sessionSearch')&&$('sessionSearch').value)||'';
+    const sessionKeys = [
+      'session_id','id','display_name','title','created_at','started_at',
+      'updated_at','last_message_at','last_activity','message_count',
+      'actual_message_count','is_streaming','streaming','status','pinned',
+      'archived','project_id','source','session_source','generation',
+      '_lineage_root_id','_lineage_tip_id','_compression_segment_count',
+    ];
+    const sessionsSlim = Array.isArray(_allSessions) ? _allSessions.map(s => {
+      if(!s || typeof s !== 'object') return s;
+      const out={};
+      sessionKeys.forEach(k=>{ if(Object.prototype.hasOwnProperty.call(s,k)) out[k]=s[k]; });
+      return out;
+    }) : _allSessions;
     return JSON.stringify([
-      _allSessions,
+      sessionsSlim,
       _allProjects,
       _activeSessionIdForSidebar(),
       search,

@@ -363,3 +363,56 @@ def test_manual_compression_recovery_behavior_is_preserved(tmp_path):
 
     assert post_status["recommend"] == "restore"
     assert post_result["restored"] is True
+
+
+def test_post_clear_message_with_stale_pre_clear_backup_is_not_restored(tmp_path):
+    """#5584 gate (Codex CORE): after a clear, the user sends one post-clear
+    message and the stale pre-clear .json.bak still exists (unlink failed). The
+    backup has MORE messages than the live sidecar, but the live sidecar carries
+    a clear_generation the backup lacks + the clear boundary reset (watermarks
+    0.0) — so recovery must NOT resurrect the pre-clear transcript on top of the
+    new message."""
+    sid = "s-postclear"
+    live_path = tmp_path / f"{sid}.json"
+    bak_path = tmp_path / f"{sid}.json.bak"
+    # Live: cleared sentinel shape + one post-clear message (boundary still 0.0,
+    # clear_generation intact — the clear handler's reset).
+    live = _clear_sentinel(sid)
+    live["messages"] = [_msg("user", "brand new post-clear question", 20.0, "u20")]
+    live["context_messages"] = [_msg("user", "brand new post-clear question", 20.0, "cu20")]
+    _write_json(live_path, live)
+    # Stale pre-clear backup: 2 messages, no clear_generation (predates the clear).
+    _write_json(bak_path, _stale_pre_clear_backup(sid))
+
+    status = inspect_session_recovery_status(live_path)
+    result = recover_session(live_path)
+
+    assert status["bak_messages"] > status["live_messages"]  # backup is "larger"
+    assert status["recommend"] == "no_action"
+    assert status.get("intentional_clear_truncate") is True
+    assert result["restored"] is False
+    # Live sidecar must still be the post-clear content, not the resurrected pre-clear.
+    reread = json.loads(live_path.read_text(encoding="utf-8"))
+    assert [m["content"] for m in reread["messages"]] == ["brand new post-clear question"]
+
+
+def test_post_clear_message_after_real_compaction_still_recovers(tmp_path):
+    """Guard the guard: if the live sidecar's boundary has moved OFF the clear
+    reset (a real compaction happened after the clear), the clear-generation
+    supersede check must decline so a genuine larger backup can still restore."""
+    sid = "s-postclear-compact"
+    live_path = tmp_path / f"{sid}.json"
+    bak_path = tmp_path / f"{sid}.json.bak"
+    live = _clear_sentinel(sid)
+    live["messages"] = [_msg("user", "q", 20.0, "u20")]
+    live["context_messages"] = [_msg("user", "q", 20.0, "cu20")]
+    # A later compaction moved the boundary off 0.0 — no longer the clear reset.
+    live["truncation_watermark"] = 30.0
+    live["truncation_boundary"] = 30.0
+    _write_json(live_path, live)
+    _write_json(bak_path, _stale_pre_clear_backup(sid))
+
+    status = inspect_session_recovery_status(live_path)
+    # Boundary moved off the clear reset -> supersede check declines -> normal
+    # recovery decides (larger backup, no compress-shrink provenance -> restore).
+    assert status["recommend"] == "restore"
